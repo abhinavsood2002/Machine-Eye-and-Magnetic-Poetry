@@ -1,0 +1,5 @@
+.DS_Store
+images
+**/__pycache__/
+install_dependencies.sh
+training
