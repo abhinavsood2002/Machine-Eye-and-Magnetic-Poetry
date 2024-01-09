@@ -62,8 +62,6 @@ print(f"Connected to Server")
 def send_image(conn, folder_name, image_data):
     
     # Use Determine Crop Utility to determine how to crop image
-    image_data = image_data[300:1250, 1000:2000]
-
     image_serialized = pickle.dumps(image_data)
     print(folder_name)
     
@@ -387,6 +385,7 @@ class HandTrackerASL:
         while True:
             in_video = q_video.get()
             video_frame = in_video.getCvFrame()
+            video_frame = video_frame[100:1250, 500:2000]
             h, w = video_frame.shape[:2]
             self.frame_size = max(h, w)
             self.pad_h = int((self.frame_size - h)/2)
