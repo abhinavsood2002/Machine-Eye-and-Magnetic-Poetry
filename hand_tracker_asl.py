@@ -48,6 +48,9 @@ HANDS_DETECTED_THRESHOLD = float(os.getenv("HANDS_DETECTED_THRESHOLD"))
 HANDS_LEFT_THRESHOLD = float(os.getenv("HANDS_LEFT_THRESHOLD"))
 ALPHA = float(os.getenv("ALPHA"))
 
+PALM_DETECTION_THRESH = float(os.getenv("PALM_DETECTION_THRESH"))
+PALM_DETECTION_NMS = float(os.getenv("PALM_DETECTION_NMS"))
+
 num_hands_buffer = mpu.ExponentialWeightedMovingAverage(ALPHA)
 # Define socket to transfer images
 client_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
@@ -57,6 +60,10 @@ print(f"Connected to Server")
 
 # Send an image via a socket
 def send_image(conn, folder_name, image_data):
+    
+    # Use Determine Crop Utility to determine how to crop image
+    image_data = image_data[300:1250, 1000:2000]
+
     image_serialized = pickle.dumps(image_data)
     print(folder_name)
     
@@ -85,7 +92,7 @@ def to_planar(arr: np.ndarray, shape: tuple) -> np.ndarray:
 class HandTrackerASL:
     def __init__(self,
                 pd_path="models/palm_detection_6_shaves.blob", 
-                pd_score_thresh=0.65, pd_nms_thresh=0.3,
+                pd_score_thresh=PALM_DETECTION_THRESH, pd_nms_thresh=PALM_DETECTION_NMS,
                 lm_path="models/hand_landmark_6_shaves.blob",
                 lm_score_threshold=0.5,
                 show_landmarks=True,
@@ -155,7 +162,7 @@ class HandTrackerASL:
         cam.initialControl.setChromaDenoise(4) 
         cam_out = pipeline.createXLinkOut()
         cam_out.setStreamName("cam_out")
-        cam.preview.link(cam_out.input)
+        cam.video.link(cam_out.input)
 
         print("Creating Palm Detection Neural Network...")
         pd_nn = pipeline.createNeuralNetwork()
@@ -465,20 +472,21 @@ class HandTrackerASL:
             #             cv2.putText(video_frame, gesture_string , (hand_bbox[0], hand_bbox[1] - 5), font, scale, color, thickness)
             
             video_frame = video_frame[self.pad_h:self.pad_h+h, self.pad_w:self.pad_w+w]
-            cv2.imshow("hand tracker", video_frame)
-            key = cv2.waitKey(1) 
-            if key == ord('q') or key == 27:
-                server_socket.close()
-                break
-            elif key == 32:
-                # Pause on space bar
-                cv2.waitKey(0)
-            elif key == ord('1'):
-                self.show_hand_box = not self.show_hand_box
-            elif key == ord('2'):
-                self.show_landmarks = not self.show_landmarks
-            elif key == ord('3'):
-                self.show_asl = not self.show_asl
+            
+            # cv2.imshow("hand tracker", video_frame)
+            # key = cv2.waitKey(1) 
+            # if key == ord('q') or key == 27:
+            #     server_socket.close()
+            #     break
+            # elif key == 32:
+            #     # Pause on space bar
+            #     cv2.waitKey(0)
+            # elif key == ord('1'):
+            #     self.show_hand_box = not self.show_hand_box
+            # elif key == ord('2'):
+            #     self.show_landmarks = not self.show_landmarks
+            # elif key == ord('3'):
+            #     self.show_asl = not self.show_asl
 
 
 if __name__ == "__main__":
