@@ -4,12 +4,27 @@ import os
 import cv2
 import time
 from ocr import tools
+import numpy as np
 import easyocr
 # Server configuration
 HOST = '130.194.71.74'  # Server's IP address
 PORT = 65432        # Port used by the server
 
-reader = easyocr.Reader(['en']) # this needs to run only once to load the model into memory
+reader = easyocr.Reader(['en'], gpu=False) # this needs to run only once to load the model into memory
+
+def ocr_preprocessing(image):
+    # Slight sharpening using a kernel on each color channel
+    kernel_sharpening = np.array([[0, -1, 0],
+                                  [-1, 5, -1],
+                                  [0, -1, 0]])
+
+    sharpened = cv2.merge([cv2.filter2D(image[:, :, i], -1, kernel_sharpening) for i in range(image.shape[2])])
+    return sharpened
+
+def sort_results_by_bounding_box(results):
+    # Sort results by the top-left corner's Y-coordinate (index 1) and then X-coordinate (index 0) of the bounding box
+    results.sort(key=lambda res: (min(res[0], key=lambda point: point[1])[1] + min(res[0], key=lambda point: point[0])[0]/15))
+    return results
 
 # while True:
     # try:
@@ -57,11 +72,10 @@ with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as server_socket:
         image_name = os.path.join("images", folder_name + ".png")
 
         # Save the received image with the given folder and image name
-        cv2.imwrite(image_name, received_image)
         received_image = cv2.rotate(received_image, cv2.ROTATE_180)
-        # test = tools.crop_img(test)
-        # cv2.imwrite("cropped.png", test)
-        result = tools.read_text(received_image, reader)
+        received_image = ocr_preprocessing(received_image)
+        cv2.imwrite(image_name, received_image)
+        result = sort_results_by_bounding_box(tools.read_text(received_image, reader))
         for a,b,c in result:
             print(b, end=" ")
 
