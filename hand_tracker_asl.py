@@ -42,6 +42,12 @@ thickness = 2
 PROCESSING_SERVER_IP = os.getenv("PROCESSING_SERVER_IP") # Server IP address
 PROCESSING_SERVER_PORT = int(os.getenv("PROCESSING_SERVER_PORT")) # Port to listen on
 
+# Crop parameters
+H_START = int(os.getenv("H_START"))
+H_END = int(os.getenv("H_END"))
+V_START = int(os.getenv("V_START"))
+V_END = int(os.getenv("V_END"))
+
 # Hyperparameters related to compu((ter vision
 WAIT_AFTER_HANDS_LEAVE = float(os.getenv("WAIT_AFTER_HANDS_LEAVE"))
 HANDS_DETECTED_THRESHOLD = float(os.getenv("HANDS_DETECTED_THRESHOLD"))
@@ -61,7 +67,6 @@ print(f"Connected to Server")
 # Send an image via a socket
 def send_image(conn, folder_name, image_data):
     
-    # Use Determine Crop Utility to determine how to crop image
     image_serialized = pickle.dumps(image_data)
     print(folder_name)
     
@@ -69,11 +74,6 @@ def send_image(conn, folder_name, image_data):
     folder_name_bytes = folder_name.encode()
     conn.sendall(len(folder_name_bytes).to_bytes(2, byteorder='big'))
     conn.sendall(folder_name_bytes)
-
-    # # Send image name length and image name as bytes
-    # image_name_bytes = image_name.encode()
-    # conn.sendall(len(image_name_bytes).to_bytes(2, byteorder='big'))
-    # conn.sendall(image_name_bytes)
 
     # Send image size
     image_size = len(image_serialized)
@@ -128,14 +128,18 @@ class HandTrackerASL:
         self.nb_anchors = self.anchors.shape[0]
         print(f"{self.nb_anchors} anchors have been created")
 
-        self.preview_width = 576
-        self.preview_height = 324
-
         self.frame_size = None
 
         self.right_char_queue = collections.deque(maxlen=5)
         self.left_char_queue = collections.deque(maxlen=5)
-
+        
+        self.preview_width = 576
+        self.preview_height = 324
+        
+        # Cropping for preview_frame, Height and Width from 4K res
+        self.preview_frame_crop_H = self.preview_width / 3840
+        self.preview_frame_crop_V = self.preview_height / 2160 
+        
         self.previous_right_char = ""
         self.right_sentence = ""
         self.previous_right_update_time = time.time()
@@ -152,15 +156,20 @@ class HandTrackerASL:
 
         print("Creating Color Camera...")
         cam = pipeline.createColorCamera()
-        cam.setPreviewSize(self.preview_width, self.preview_height)
         cam.setResolution(dai.ColorCameraProperties.SensorResolution.THE_4_K)
         cam.setInterleaved(False)
-        cam.initialControl.setSharpness(0)     # range: 0..4, default: 1
-        cam.initialControl.setLumaDenoise(0)   # range: 0..4, default: 1
+        cam.setPreviewSize(self.preview_width, self.preview_height)
+        cam.initialControl.setSharpness(1)     # range: 0..4, default: 1
+        cam.initialControl.setLumaDenoise(1)   # range: 0..4, default: 1
         cam.initialControl.setChromaDenoise(4) 
+        
         cam_out = pipeline.createXLinkOut()
         cam_out.setStreamName("cam_out")
         cam.video.link(cam_out.input)
+
+        cam_nn_out = pipeline.createXLinkOut()
+        cam_nn_out.setStreamName("cam_nn_out")
+        cam.preview.link(cam_nn_out.input)
 
         print("Creating Palm Detection Neural Network...")
         pd_nn = pipeline.createNeuralNetwork()
@@ -171,28 +180,6 @@ class HandTrackerASL:
         pd_out = pipeline.createXLinkOut()
         pd_out.setStreamName("pd_out")
         pd_nn.out.link(pd_out.input)
-
-        # print("Creating Hand Landmark Neural Network...")          
-        # lm_nn = pipeline.createNeuralNetwork()
-        # lm_nn.setBlobPath(str(Path(self.lm_path).resolve().absolute()))
-        # self.lm_input_length = 224
-        # lm_in = pipeline.createXLinkIn()
-        # lm_in.setStreamName("lm_in")
-        # lm_in.out.link(lm_nn.input)
-        # lm_out = pipeline.createXLinkOut()
-        # lm_out.setStreamName("lm_out")
-        # lm_nn.out.link(lm_out.input)
-
-        # print("Creating Hand ASL Recognition Neural Network...")          
-        # asl_nn = pipeline.createNeuralNetwork()
-        # asl_nn.setBlobPath(str(Path(self.lasl_path).resolve().absolute()))
-        # self.asl_input_length = 224
-        # asl_in = pipeline.createXLinkIn()
-        # asl_in.setStreamName("asl_in")
-        # asl_in.out.link(asl_nn.input)
-        # asl_out = pipeline.createXLinkOut()
-        # asl_out.setStreamName("asl_out")
-        # asl_nn.out.link(asl_out.input)
 
         print("Pipeline created.")
         return pipeline
@@ -208,17 +195,6 @@ class HandTrackerASL:
         mpu.detections_to_rect(self.regions)
         mpu.rect_transformation(self.regions, self.frame_size, self.frame_size)
 
-    
-    def lm_postprocess(self, region, inference):
-        region.lm_score = inference.getLayerFp16("Identity_1")[0]    
-        region.handedness = inference.getLayerFp16("Identity_2")[0]
-        lm_raw = np.array(inference.getLayerFp16("Squeeze"))
-        
-        lm = []
-        for i in range(int(len(lm_raw)/3)):
-            # x,y,z -> x/w,y/h,z/w (here h=w)
-            lm.append(lm_raw[3*i:3*(i+1)]/self.lm_input_length)
-        region.landmarks = lm
 
     def process_hand_detection(self, hands_detection_average, frame = None):
         if  hands_detection_average > HANDS_LEFT_THRESHOLD:
@@ -232,174 +208,36 @@ class HandTrackerASL:
                 cv2.imwrite("images/" + folder_name + ".png", frame)
                 send_image(client_socket, folder_name, frame)
 
-    def lm_render(self, frame, original_frame, region):
-        cropped_frame = None
-        hand_bbox = []
-        if region.lm_score > self.lm_score_threshold:
-            palmar = True
-            src = np.array([(0, 0), (1, 0), (1, 1)], dtype=np.float32)
-            dst = np.array([ (x, y) for x,y in region.rect_points[1:]], dtype=np.float32) # region.rect_points[0] is left bottom point !
-            mat = cv2.getAffineTransform(src, dst)
-            lm_xy = np.expand_dims(np.array([(l[0], l[1]) for l in region.landmarks]), axis=0)
-            lm_xy = np.squeeze(cv2.transform(lm_xy, mat)).astype(np.int32)
-            if self.show_landmarks:
-                list_connections = [[0, 1, 2, 3, 4], 
-                                    [5, 6, 7, 8], 
-                                    [9, 10, 11, 12],
-                                    [13, 14 , 15, 16],
-                                    [17, 18, 19, 20]]
-                palm_line = [np.array([lm_xy[point] for point in [0, 5, 9, 13, 17, 0]])]
-
-                # Draw lines connecting the palm
-                if region.handedness > 0.5:
-                    # Simple condition to determine if palm is palmar or dorasl based on the relative 
-                    # position of thumb and pinky finger
-                    if lm_xy[4][0] > lm_xy[20][0]:
-                        cv2.polylines(frame, palm_line, False, (255, 255, 255), 2, cv2.LINE_AA)
-                    else:
-                        cv2.polylines(frame, palm_line, False, (128, 128, 128), 2, cv2.LINE_AA)
-                else:
-                    # Simple condition to determine if palm is palmar or dorasl based on the relative 
-                    # position of thumb and pinky finger
-                    if lm_xy[4][0] < lm_xy[20][0]:
-                        cv2.polylines(frame, palm_line, False, (255, 255, 255), 2, cv2.LINE_AA)
-                    else:
-                        cv2.polylines(frame, palm_line, False, (128, 128, 128), 2, cv2.LINE_AA)
-                
-                # Draw line for each finger
-                for i in range(len(list_connections)):
-                    finger = list_connections[i]
-                    line = [np.array([lm_xy[point] for point in finger])]
-                    if region.handedness > 0.5:
-                        if lm_xy[4][0] > lm_xy[20][0]:
-                            palmar = True
-                            cv2.polylines(frame, line, False, FINGER_COLOR[i], 2, cv2.LINE_AA)
-                            for point in finger:
-                                pt = lm_xy[point]
-                                cv2.circle(frame, (pt[0], pt[1]), 3, JOINT_COLOR[i], -1)
-                        else:
-                            palmar = False
-                    else:
-                        if lm_xy[4][0] < lm_xy[20][0]:
-                            palmar = True
-                            cv2.polylines(frame, line, False, FINGER_COLOR[i], 2, cv2.LINE_AA)
-                            for point in finger:
-                                pt = lm_xy[point]
-                                cv2.circle(frame, (pt[0], pt[1]), 3, JOINT_COLOR[i], -1)
-                        else:
-                            palmar = False
-                    
-                    # Use different colour for the hand to represent dorsal side
-                    if not palmar:
-                        cv2.polylines(frame, line, False, (128, 128, 128), 2, cv2.LINE_AA)
-                        for point in finger:
-                            pt = lm_xy[point]
-                            cv2.circle(frame, (pt[0], pt[1]), 3, (0, 0, 0), -1)
-
-            # Calculate the bounding box for the entire hand
-            max_x = 0
-            max_y = 0
-            min_x = frame.shape[1]
-            min_y = frame.shape[0]
-            for x,y in lm_xy:
-                if x < min_x:
-                    min_x = x
-                if x > max_x:
-                    max_x = x
-                if y < min_y:
-                    min_y = y
-                if y > max_y:
-                    max_y = y
-
-            box_width = max_x - min_x
-            box_height = max_y - min_y
-            x_center = min_x + box_width / 2
-            y_center = min_y + box_height / 2
-
-            # Enlarge the hand bounding box for drawing use
-            draw_width = box_width/2 * 1.2
-            draw_height = box_height/2 * 1.2
-            draw_size = max(draw_width, draw_height)
-
-            draw_min_x = int(x_center - draw_size)
-            draw_min_y = int(y_center - draw_size)
-            draw_max_x = int(x_center + draw_size)
-            draw_max_y = int(y_center + draw_size)
-
-            hand_bbox = [draw_min_x, draw_min_y, draw_max_x, draw_max_y]
-
-            if self.show_hand_box:
-
-                cv2.rectangle(frame, (draw_min_x, draw_min_y), (draw_max_x, draw_max_y), (36, 152, 0), 2)
-
-                palmar_text = ""
-                if region.handedness > 0.5:
-                    palmar_text = "Right: "
-                else:
-                    palmar_text = "Left: "
-                if palmar:
-                    palmar_text = palmar_text + "Palmar"
-                else:
-                    palmar_text = palmar_text + "Dorsal"
-                cv2.putText(frame, palmar_text , (draw_min_x + 1, draw_max_x + 15 + 1), font, scale, color, thickness, bottomLeftOrigin=True)
-                cv2.putText(frame, palmar_text , (draw_min_x, draw_max_x + 15), font, scale, color, thickness, bottomLeftOrigin=True)
-
-            if self.asl_recognition:
-                # Enlarge the hand bounding box for image cropping 
-                new_width = box_width/2 * 1.5
-                new_height = box_height/2 * 1.5
-
-                new_size = max(new_width, new_height)
-
-                min_x = int(x_center - new_size)
-                min_y = int(y_center - new_size)
-                max_x = int(x_center + new_size)
-                max_y = int(y_center + new_size)
-                
-                if min_x < 0:
-                    min_x = 0
-                if min_y < 0:
-                    min_y = 0
-                if max_x > frame.shape[1]:
-                    max_x = frame.shape[1] - 1
-                if max_y > frame.shape[0]:
-                    max_y = frame.shape[0] - 1
-
-                # Crop out the image of the hand
-                cropped_frame = original_frame[min_y:max_y, min_x:max_x]
-
-        return cropped_frame, region.handedness, hand_bbox
-
-
     def run(self):
         device = dai.Device(self.create_pipeline())
         q_video = device.getOutputQueue(name="cam_out", maxSize=1, blocking=False)
+        q_preview = device.getOutputQueue(name="cam_nn_out", maxSize=1, blocking=False)
         q_pd_in = device.getInputQueue(name="pd_in")
         q_pd_out = device.getOutputQueue(name="pd_out", maxSize=4, blocking=True)
-        # q_lm_out = device.getOutputQueue(name="lm_out", maxSize=4, blocking=True)
-        # q_lm_in = device.getInputQueue(name="lm_in")
-        # q_asl_out = device.getOutputQueue(name="asl_out", maxSize=4, blocking=True)
-        # q_asl_in = device.getInputQueue(name="asl_in")
-
-        
+    
         while True:
             in_video = q_video.get()
+            in_preview = q_preview.get()
             video_frame = in_video.getCvFrame()
-            video_frame = video_frame[100:1250, 500:2000]
-            h, w = video_frame.shape[:2]
+            preview_frame = in_preview.getCvFrame()
+
+            # Crop using Determine Utilities tool
+            to_send = video_frame[V_START:V_END, H_START:H_END]
+
+            h, w = preview_frame.shape[:2]
             self.frame_size = max(h, w)
             self.pad_h = int((self.frame_size - h)/2)
             self.pad_w = int((self.frame_size - w)/2)
-            to_send = video_frame.copy()
-            video_frame = cv2.copyMakeBorder(video_frame, self.pad_h, self.pad_h, self.pad_w, self.pad_w, cv2.BORDER_CONSTANT)
-            
+            preview_frame = cv2.copyMakeBorder(preview_frame, self.pad_h, self.pad_h, self.pad_w, self.pad_w, cv2.BORDER_CONSTANT)
+
             frame_nn = dai.ImgFrame()
             frame_nn.setWidth(self.pd_input_length)
             frame_nn.setHeight(self.pd_input_length)
-            frame_nn.setData(to_planar(video_frame, (self.pd_input_length, self.pd_input_length)))
+            frame_nn.setData(to_planar(preview_frame, (self.pd_input_length, self.pd_input_length)))
             q_pd_in.send(frame_nn)
-
-            annotated_frame = video_frame.copy()
+          
+            # cv2.imshow("nn_frame", preview_frame)
+            # cv2.waitKey(1)
 
             # Get palm detection
             inference = q_pd_out.get()
@@ -413,81 +251,6 @@ class HandTrackerASL:
             if self.hands_detection_context["ongoing"]:
                 self.process_hand_detection(average, to_send)
                 
-            # # Send data for hand landmarks
-            # for i,r in enumerate(self.regions):
-            #     img_hand = mpu.warp_rect_img(r.rect_points, video_frame, self.lm_input_length, self.lm_input_length)
-            #     nn_data = dai.NNData()   
-            #     nn_data.setLayer("input_1", to_planar(img_hand, (self.lm_input_length, self.lm_input_length)))
-            #     q_lm_in.send(nn_data)
-
-            # # Retrieve hand landmarks
-            # for i,r in enumerate(self.regions):
-            #     inference = q_lm_out.get()
-            #     self.lm_postprocess(r, inference)
-            #     hand_frame, handedness, hand_bbox = self.lm_render(video_frame, annotated_frame, r)
-            #     # ASL recognition
-            #     if hand_frame is not None and self.asl_recognition:
-            #         hand_frame = cv2.resize(hand_frame, (self.asl_input_length, self.asl_input_length), interpolation=cv2.INTER_NEAREST)
-            #         hand_frame = hand_frame.transpose(2,0,1)
-            #         nn_data = dai.NNData()
-            #         nn_data.setLayer("input", hand_frame)
-            #         q_asl_in.send(nn_data)
-            #         asl_result = np.array(q_asl_out.get().getFirstLayerFp16())
-            #         asl_idx = np.argmax(asl_result)
-            #         # Recognized ASL character is associated with a probability
-            #         asl_char = [characters[asl_idx], round(asl_result[asl_idx] * 100, 1)]
-            #         selected_char = asl_char
-            #         current_char_queue = None
-            #         if handedness > 0.5:
-            #             current_char_queue = self.right_char_queue
-            #         else:
-            #             current_char_queue = self.left_char_queue
-            #         current_char_queue.append(selected_char)
-            #         # Peform filtering of recognition resuls using the previous 5 results
-            #         # If there aren't enough reults, take the first result as output
-            #         if len(current_char_queue) < 5:
-            #             selected_char = current_char_queue[0]
-            #         else:
-            #             char_candidate = {}
-            #             for i in range(5):
-            #                 if current_char_queue[i][0] not in char_candidate:
-            #                     char_candidate[current_char_queue[i][0]] = [1, current_char_queue[i][1]]
-            #                 else:
-            #                     char_candidate[current_char_queue[i][0]][0] += 1
-            #                     char_candidate[current_char_queue[i][0]][1] += current_char_queue[i][1]
-            #             most_voted_char = ""
-            #             max_votes = 0
-            #             most_voted_char_prob = 0
-            #             for key in char_candidate:
-            #                 if char_candidate[key][0] > max_votes:
-            #                     max_votes = char_candidate[key][0]
-            #                     most_voted_char = key
-            #                     most_voted_char_prob = round(char_candidate[key][1] / char_candidate[key][0], 1)
-            #             selected_char = (most_voted_char, most_voted_char_prob)
-                    
-            #         if self.show_asl:
-            #             gesture_string = "Letter: " + selected_char[0] + ", " + str(selected_char[1]) + "%"
-            #             cv2.rectangle(video_frame, (hand_bbox[0] - 5, hand_bbox[1]), (hand_bbox[0]+ 5, hand_bbox[1] - 18), (36, 152, 0), -1)
-            #             cv2.putText(video_frame, gesture_string , (hand_bbox[0], hand_bbox[1] - 5), font, scale, color, thickness)
-            
-            video_frame = video_frame[self.pad_h:self.pad_h+h, self.pad_w:self.pad_w+w]
-            
-            # cv2.imshow("hand tracker", video_frame)
-            # key = cv2.waitKey(1) 
-            # if key == ord('q') or key == 27:
-            #     server_socket.close()
-            #     break
-            # elif key == 32:
-            #     # Pause on space bar
-            #     cv2.waitKey(0)
-            # elif key == ord('1'):
-            #     self.show_hand_box = not self.show_hand_box
-            # elif key == ord('2'):
-            #     self.show_landmarks = not self.show_landmarks
-            # elif key == ord('3'):
-            #     self.show_asl = not self.show_asl
-
-
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("--pd_m", default="models/palm_detection_6_shaves.blob", type=str,

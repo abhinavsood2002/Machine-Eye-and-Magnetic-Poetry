@@ -41,21 +41,21 @@ with dai.Device(pipeline) as device:
     # Make sure the destination path is present before starting to store the examples
     dirName = "rgb_data"
     Path(dirName).mkdir(parents=True, exist_ok=True)
-
+    
+    time.sleep(1)
     while True:
-        
         x_from = int(input("Horizontal Start:"))
         x_to = int(input("Horizontal End:"))
         y_from = int(input("Vertical Start:"))
         y_to = int(input("Vertical End:"))
-        
+        print(f"[{y_from}:{y_to}, {x_from}:{x_to}]")
         start_point = (x_from, y_from)
         end_point = (x_to, y_to)
 
         inRgb = qRgb.tryGet()  # Non-blocking call, will return a new data that has arrived or None otherwise
         if inRgb is not None:
             frame = inRgb.getCvFrame()
-            frame = cv2.rectangle(frame, start_point, end_point, (0,255,0), 2)
+            frame = cv2.rectangle(frame, start_point, end_point, (0,255,0), 4)
             # 4k / 4
             frame = cv2.pyrDown(frame)
             frame = cv2.pyrDown(frame)
