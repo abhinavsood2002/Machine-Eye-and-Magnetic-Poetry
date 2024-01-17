@@ -1,3 +1,9 @@
+# Magnetic Poetry Raspberry Pi Code
+- `configs` contains the config file used for environmental variables used in the code. These include parameters to crop the fov, parameters to set the ip for socket file transfer, parameters that control when images are captured, and hyperparameters for the hand detection model.
+- `models` contains the model files used in the original hand detection code
+- `determine_crop_utility.py` can be run to manually figure out the parameters for cropping the fov via trial and error
+-  `hand_tracker.asl.py` contains the code that processes the hand detection and sends corresponding images to the server. The primary source of this code is from the repository mentioned below.
+
 # American Sign Language (ASL) Recognition using Hand Landmarks
 
 This is the source code of the article: [Classifying American Sign Language Alphabets on the OAK-D](https://www.cortic.ca/post/classifying-american-sign-language-alphabets-on-the-oak-d)
