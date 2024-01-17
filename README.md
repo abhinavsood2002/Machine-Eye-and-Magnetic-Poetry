@@ -7,6 +7,13 @@ branches in the repository are as follows:
 - **rpi** : This branch contains the code that is run on a Raspberry Pi (Model 4B).
 - **server** : This branch contains the implementation of the the remote server that stores and processes information collected on the raspberry pi.
 
-**Magnetic Eye Related**
-- **poetry-rpi** :
-- **poetry-server** :
+**Magnetic Poetry Related**
+- **poetry-rpi** : This branch contains the code that is run on a Raspberry Pi (Model 4B). 
+- **poetry-server** : This branch contains the implementation of the the remote server that stores and processes information collected on the raspberry pi.
+
+## How the system works
+### Machine Eye
+### Magnetic Poetry
+
+## Daily Logs
+This contains observations that may/may not be useful for anyone who continues to choose to work on the developed system. These logs contain basic observations about different components and "shallow" recordings of the work done.
