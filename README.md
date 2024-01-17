@@ -31,5 +31,5 @@ in the machine system are recorded in various branches of this repository. The c
 - On the server, the image is received and EasyOCR is run on a sharpened and rotated version of the image to get the text in the image.
 - Using the bounding boxes of each magnet detected, the magnets are ordered. (This needs to be refined)
 
-
+#### Daily Notes (not really daily, but general observations made on those days)
 This contains observations that may/may not be useful for anyone who continues to choose to work on the developed system. These logs contain basic observations about different components and "shallow" recordings of the work done.
